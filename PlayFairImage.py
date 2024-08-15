@@ -1,169 +1,88 @@
 from PIL import Image
+from pprint import pprint
 import numpy as np
-from collections import defaultdict
-import string
+from typing import List
 
-def load_image(image_path, mode='RGB'):
-    image = Image.open(image_path).convert(mode)
-    return np.array(image)
+def generate_matrix_from_image(key_image_path: str) -> List[List[int]]:
+    key_img = Image.open(key_image_path).convert('L')  # Convert to grayscale
+    pixels = list(key_img.getdata())
+        unique_pixels = []
+    seen = set()
+    for pixel in pixels:
+        if pixel not in seen and len(unique_pixels) < 256:
+            seen.add(pixel)
+            unique_pixels.append(pixel)
+    
+    if len(unique_pixels) < 256:
+        remaining = [x for x in range(256) if x not in unique_pixels]
+        unique_pixels.extend(remaining[:256-len(unique_pixels)])
+    
+    matrix = [unique_pixels[i*16:(i+1)*16] for i in range(16)]
+    return matrix
 
-def save_image(array, output_path):
-    image = Image.fromarray(array)
-    image.save(output_path)
-
-def resize_image(image_array, target_shape):
-    image = Image.fromarray(image_array)
-    resized_image = image.resize((target_shape[1], target_shape[0]))
-    return np.array(resized_image)
-
-def flip_chunk(chunk, flip_horizontal):
-    return chunk
-
-def convert_to_grayscale(image_array):
-    if len(image_array.shape) == 3:  # Convert RGB to grayscale
-        return np.dot(image_array[...,:3], [0.299, 0.587, 0.114]).astype(np.uint8)
-    return image_array
-
-def process_chunks(nature, key, chunk_size):
-    height, width = nature.shape
-    num_chunks_x = width // chunk_size
-    num_chunks_y = height // chunk_size
-
-    encrypted_chunks = np.zeros_like(nature)
-    for y in range(num_chunks_y):
-        for x in range(num_chunks_x):
-            nature_chunk = nature[y*chunk_size:(y+1)*chunk_size, x*chunk_size:(x+1)*chunk_size]
-            key_chunk = key[y*chunk_size:(y+1)*chunk_size, x*chunk_size:(x+1)*chunk_size]
-            
-            flip_horizontal = (x + y) % 2 == 0
-            if flip_horizontal:
-                key_chunk = flip_chunk(key_chunk, flip_horizontal)
-
-            encrypted_chunk = np.clip(nature_chunk + key_chunk, 0, 255).astype(np.uint8)
-            encrypted_chunks[y*chunk_size:(y+1)*chunk_size, x*chunk_size:(x+1)*chunk_size] = encrypted_chunk
-
-    return encrypted_chunks
-
-# Define Playfair cipher functions
-def create_playfair_matrix(key):
-    key = key.upper().replace('J', 'I')
-    matrix = []
-    used = set()
-    for char in key:
-        if char not in used and char in string.ascii_uppercase:
-            used.add(char)
-            matrix.append(char)
-    for char in string.ascii_uppercase:
-        if char not in used and char != 'J':
-            used.add(char)
-            matrix.append(char)
-    return np.array(matrix).reshape(5, 5)
-
-def playfair_encrypt(plain_text, matrix):
-    def digraphs(text):
-        text = text.upper().replace('J', 'I')
-        digraphs = []
-        i = 0
-        while i < len(text):
-            if i + 1 < len(text) and text[i] != text[i + 1]:
-                digraphs.append(text[i] + text[i + 1])
-                i += 2
-            else:
-                digraphs.append(text[i] + 'X')
-                i += 1
-        return digraphs
-
-    def find_position(char):
-        row, col = np.where(matrix == char)
-        return int(row[0]), int(col[0])
-
-    encrypted_text = []
-    for digraph in digraphs(plain_text):
-        row1, col1 = find_position(digraph[0])
-        row2, col2 = find_position(digraph[1])
+def encrypt_playfair_image(matrix: List[List[int]], image_path: str) -> Image.Image:
+    lookup = {val: (i, j) for i, row in enumerate(matrix) for j, val in enumerate(row)}
+    
+    img = Image.open(image_path).convert('L') 
+    width, height = img.size
+    pixels = list(img.getdata())
+    
+    encrypted_pixels = []
+    for i in range(0, len(pixels), 2):
+        pixel1 = pixels[i]
+        pixel2 = pixels[i+1] if i+1 < len(pixels) else 0
+        
+        row1, col1 = lookup[pixel1]
+        row2, col2 = lookup[pixel2]
+        
         if row1 == row2:
-            encrypted_text.append(matrix[row1, (col1 + 1) % 5])
-            encrypted_text.append(matrix[row2, (col2 + 1) % 5])
+            encrypted_pixels.extend([matrix[row1][(col1 + 1) % 16], matrix[row2][(col2 + 1) % 16]])
         elif col1 == col2:
-            encrypted_text.append(matrix[(row1 + 1) % 5, col1])
-            encrypted_text.append(matrix[(row2 + 1) % 5, col2])
+            encrypted_pixels.extend([matrix[(row1 + 1) % 16][col1], matrix[(row2 + 1) % 16][col2]])
         else:
-            encrypted_text.append(matrix[row1, col2])
-            encrypted_text.append(matrix[row2, col1])
-    return ''.join(encrypted_text)
+            encrypted_pixels.extend([matrix[row1][col2], matrix[row2][col1]])
+    
+    encrypted_image = Image.new('L', (width, height))
+    encrypted_image.putdata(encrypted_pixels)
+    return encrypted_image
 
-def playfair_decrypt(encrypted_text, matrix):
-    def digraphs(text):
-        text = text.upper()
-        return [text[i:i+2] for i in range(0, len(text), 2)]
-
-    def find_position(char):
-        row, col = np.where(matrix == char)
-        return int(row[0]), int(col[0])
-
-    decrypted_text = []
-    for digraph in digraphs(encrypted_text):
-        row1, col1 = find_position(digraph[0])
-        row2, col2 = find_position(digraph[1])
+def decrypt_playfair_image(matrix: List[List[int]], encrypted_image: Image.Image) -> Image.Image:
+    lookup = {val: (i, j) for i, row in enumerate(matrix) for j, val in enumerate(row)}
+    
+    width, height = encrypted_image.size
+    pixels = list(encrypted_image.getdata())
+    
+    decrypted_pixels = []
+    for i in range(0, len(pixels), 2):
+        pixel1 = pixels[i]
+        pixel2 = pixels[i+1] if i+1 < len(pixels) else 0
+        
+        row1, col1 = lookup[pixel1]
+        row2, col2 = lookup[pixel2]
+        
         if row1 == row2:
-            decrypted_text.append(matrix[row1, (col1 - 1) % 5])
-            decrypted_text.append(matrix[row2, (col2 - 1) % 5])
+            decrypted_pixels.extend([matrix[row1][(col1 - 1) % 16], matrix[row2][(col2 - 1) % 16]])
         elif col1 == col2:
-            decrypted_text.append(matrix[(row1 - 1) % 5, col1])
-            decrypted_text.append(matrix[(row2 - 1) % 5, col2])
+            decrypted_pixels.extend([matrix[(row1 - 1) % 16][col1], matrix[(row2 - 1) % 16][col2]])
         else:
-            decrypted_text.append(matrix[row1, col2])
-            decrypted_text.append(matrix[row2, col1])
-    return ''.join(decrypted_text).replace('X', '')
+            decrypted_pixels.extend([matrix[row1][col2], matrix[row2][col1]])
+    
+    decrypted_image = Image.new('L', (width, height))
+    decrypted_image.putdata(decrypted_pixels)
+    return decrypted_image
 
-def encrypt_image(nature_path, key_path, encrypted_path, chunk_size):
-    nature = load_image(nature_path, 'RGB')
-    key = load_image(key_path, 'RGB')
-    
-    nature_gray = convert_to_grayscale(nature)
-    key_gray = convert_to_grayscale(key)
-    
-    if nature_gray.shape != key_gray.shape:
-        key_gray = resize_image(key_gray, nature_gray.shape)
-    
-    encrypted = process_chunks(nature_gray, key_gray, chunk_size)
-    save_image(encrypted, encrypted_path)
+if __name__ == "__main__":
+    key_image_path = "keyimage.jpg"
+    input_image_path = "nature.jpg"
+    encrypted_image_path = "encrypted_image.png"
+    decrypted_image_path = "decrypted_image.png"
 
-def decrypt_image(encrypted_path, key_path, decrypted_path, chunk_size):
-    encrypted = load_image(encrypted_path, 'RGB')
-    key = load_image(key_path, 'RGB')
+    matrix = generate_matrix_from_image(key_image_path)
+    pprint(matrix)
+    encrypted_image = encrypt_playfair_image(matrix, input_image_path)
+    encrypted_image.save(encrypted_image_path)
     
-    encrypted_gray = convert_to_grayscale(encrypted)
-    key_gray = convert_to_grayscale(key)
-    
-    if encrypted_gray.shape != key_gray.shape:
-        key_gray = resize_image(key_gray, encrypted_gray.shape)
-    
-    height, width = encrypted_gray.shape
-    num_chunks_x = width // chunk_size
-    num_chunks_y = height // chunk_size
-    
-    decrypted_chunks = np.zeros_like(encrypted_gray)
-    for y in range(num_chunks_y):
-        for x in range(num_chunks_x):
-            encrypted_chunk = encrypted_gray[y*chunk_size:(y+1)*chunk_size, x*chunk_size:(x+1)*chunk_size]
-            key_chunk = key_gray[y*chunk_size:(y+1)*chunk_size, x*chunk_size:(x+1)*chunk_size]
-            
-            flip_horizontal = (x + y) % 2 == 0
-            if flip_horizontal:
-                key_chunk = flip_chunk(key_chunk, flip_horizontal)
+    decrypted_image = decrypt_playfair_image(matrix, encrypted_image)
+    decrypted_image.save(decrypted_image_path)
 
-            decrypted_chunk = np.clip(encrypted_chunk - key_chunk, 0, 255).astype(np.uint8)
-            decrypted_chunks[y*chunk_size:(y+1)*chunk_size, x*chunk_size:(x+1)*chunk_size] = decrypted_chunk
-
-    save_image(decrypted_chunks, decrypted_path)
-
-# Example usage
-nature_image_path = 'nature.jpg'
-key_image_path = 'key.jfif'
-encrypted_image_path = 'encrypted.jpg'
-decrypted_image_path = 'decrypted.jpg'
-chunk_size = 256  # Define the size of the chunks (e.g., 256x256 pixels)
-
-encrypt_image(nature_image_path, key_image_path, encrypted_image_path, chunk_size)
-decrypt_image(encrypted_image_path, key_image_path, decrypted_image_path, chunk_size)
+    print("Encryption and decryption completed. Check the output images.")
