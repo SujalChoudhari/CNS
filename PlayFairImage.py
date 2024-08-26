@@ -6,7 +6,7 @@ from typing import List
 def generate_matrix_from_image(key_image_path: str) -> List[List[int]]:
     key_img = Image.open(key_image_path).convert('L')  # Convert to grayscale
     pixels = list(key_img.getdata())
-        unique_pixels = []
+    unique_pixels = []
     seen = set()
     for pixel in pixels:
         if pixel not in seen and len(unique_pixels) < 256:
