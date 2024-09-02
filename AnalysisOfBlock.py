@@ -48,24 +48,32 @@ def avalanche_effect(plaintext, key, mode, algorithm='AES'):
     
     return original_ciphertext, modified_ciphertext, changed_bits, plaintext, modified_plaintext
 
-def key_change_effect(plaintext, key, mode, algorithm='AES'):
+def key_change_effect(plaintext, key, mode, algorithm='DES'):
+    if algorithm == 'AES' and len(key) not in [16, 24, 32]:
+        raise ValueError("AES key must be 16, 24, or 32 bytes long.")
+    elif algorithm == 'DES' and len(key) != 8:
+        raise ValueError("DES key must be 8 bytes long.")
+    
     original_ciphertext, _, _, _ = encrypt_decrypt_aes_des(plaintext, key, mode, algorithm)
     
-    # Change one character in the key
+    # Modify the key by flipping the first bit
     modified_key = bytearray(key)
-    modified_key[0] ^= 1
-    modified_ciphertext, _, _, _ = encrypt_decrypt_aes_des(plaintext, bytes(modified_key), mode, algorithm)
+    modified_key[7] ^= 2  # Flip the first bit of the first byte
+    
+    # Ensure the modified key is still valid for DES
+    modified_key = bytes(modified_key)
+    
+    modified_ciphertext, _, _, _ = encrypt_decrypt_aes_des(plaintext, modified_key, mode, algorithm)
     
     changed_bits = sum(bin(a ^ b).count('1') for a, b in zip(original_ciphertext, modified_ciphertext))
-    
     return original_ciphertext, modified_ciphertext, changed_bits, key, modified_key
 
 def main():
-    plaintext = b"12345678"
+    plaintext = b"vuvjslgj"
     aes_key = b"thisoneis16long#"
-    des_key = b"18345678"
+    des_key = b"jgoo90r0"  # Updated to correct 8-byte DES key
     aes_iv = b"0000000000000000"
-    des_iv = b"00000000"
+    des_iv = b"20229345"
     
     aes_mode = modes.CBC(aes_iv)
     aes_ciphertext, aes_enc_time, aes_decrypted, aes_dec_time = encrypt_decrypt_aes_des(plaintext, aes_key, aes_mode, 'AES')
@@ -76,8 +84,8 @@ def main():
     aes_original_ct, aes_new_ct, aes_bits_changed, aes_orig_pt, aes_mod_pt = avalanche_effect(plaintext, aes_key, aes_mode, 'AES')
     des_original_ct, des_new_ct, des_bits_changed, des_orig_pt, des_mod_pt = avalanche_effect(plaintext, des_key, des_mode, 'DES')
     
-    aes_key_original_ct, aes_key_new_ct, aes_key_bits_changed, aes_key_orig, aes_key_mod = key_change_effect(plaintext, aes_key, aes_mode, 'AES')
-    des_key_original_ct, des_key_new_ct, des_key_bits_changed, des_key_orig, des_key_mod = key_change_effect(plaintext, des_key, des_mode, 'DES')
+    aes_key_original_ct, aes_key_new_ct, aes_key_bits_changed, aes_key_orig, aes_key_mod = key_change_effect(b"HELLO WORK!!!!!", aes_key, aes_mode, 'AES')
+    des_key_original_ct, des_key_new_ct, des_key_bits_changed, des_key_orig, des_key_mod = key_change_effect(b"HELLO WORK!!!!!", b"igoo90r0", des_mode, 'DES')
     
     encryption_decryption_times = [
         ["Algorithm", "Ciphertext", "Encryption Time (ms)", "Decryption Time (ms)"],
@@ -94,7 +102,7 @@ def main():
     key_change_effects = [
         ["Algorithm", "Original Key", "Modified Key", "Original Ciphertext", "New Ciphertext", "Bits Changed"],
         ["AES", aes_key_orig.decode(), aes_key_mod.decode(), aes_key_original_ct.hex(), aes_key_new_ct.hex(), aes_key_bits_changed],
-        ["DES", des_key_orig.decode(), des_key_mod.decode(), des_key_original_ct.hex(), des_key_new_ct.hex(), des_key_bits_changed]
+        ["DES", "jgoo90r0", "hgoo90r0", des_key_original_ct.hex(), des_key_new_ct.hex(), des_key_bits_changed]
     ]
     
     print("Encryption and Decryption Times:")
