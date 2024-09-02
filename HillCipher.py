@@ -1,60 +1,99 @@
 import numpy as np
 from PIL import Image
 
-def read_and_prepare_image(image_path, size=None):
-    with Image.open(image_path) as img:
-        img_gray = img.convert('L')
-        if size:
-            img_gray = img_gray.resize(size)
-        return np.array(img_gray, dtype=np.int64)
+def mod_inverse(a, m):
+    """Compute the modular inverse of a under modulo m."""
+    for x in range(1, m):
+        if (a * x) % m == 1:
+            return x
+    return None
 
-def matrix_mod_inv(matrix, modulus):
-    det = int(np.round(np.linalg.det(matrix)))
-    det_inv = pow(det, -1, modulus)
-    adjugate = det_inv * np.round(det * np.linalg.inv(matrix)).astype(int)
-    return np.mod(adjugate, modulus)
+def encrypt_block(block, key_matrix):
+    """Encrypt a block of the image using the Hill cipher key matrix."""
+    return np.dot(key_matrix, block) % 256
 
+def decrypt_block(block, inv_key_matrix):
+    """Decrypt a block of the image using the Hill cipher inverse key matrix."""
+    return np.dot(inv_key_matrix, block) % 256
 
-def hill_cipher_image(image_array, key, mode='encrypt'):
-    key_matrix = prepare_key(key)
-    block_size = key_matrix.shape[0]
-    h, w = image_array.shape
-    
+def hill_cipher_image(image_path, key_matrix, mode='encrypt'):
+    """Encrypt or decrypt an image using the Hill cipher."""
+    img = Image.open(image_path)
+    img = img.convert('L')  # Convert to grayscale
+    pixels = np.array(img)
+
+    n = key_matrix.shape[0]
+
     if mode == 'decrypt':
-        key_matrix = matrix_mod_inv(key_matrix, 256)
-    
-    result = np.zeros_like(image_array, dtype=np.int64)
-    
-    for i in range(0, h, block_size):
-        for j in range(0, w, block_size):
-            block = image_array[i:i+block_size, j:j+block_size]
-            if block.shape[0] < block_size or block.shape[1] < block_size:
-                padded_block = np.pad(block, ((0, block_size - block.shape[0]), (0, block_size - block.shape[1])), mode='constant')
+        det = int(np.round(np.linalg.det(key_matrix)))
+        det_inv = mod_inverse(det, 256)
+
+        if det_inv is None:
+            raise ValueError("Key matrix is not invertible under mod 256")
+
+        adjugate_matrix = np.round(det * np.linalg.inv(key_matrix)).astype(int) % 256
+        inv_key_matrix = (det_inv * adjugate_matrix) % 256
+    else:
+        inv_key_matrix = None
+
+    # Pad the image to make sure dimensions are divisible by n
+    padded_height = (pixels.shape[0] + n - 1) // n * n
+    padded_width = (pixels.shape[1] + n - 1) // n * n
+    padded_pixels = np.pad(pixels, ((0, padded_height - pixels.shape[0]), 
+                                    (0, padded_width - pixels.shape[1])), 
+                          mode='constant', constant_values=0)
+
+    processed_pixels = np.copy(padded_pixels)
+
+    for i in range(0, padded_pixels.shape[0], n):
+        for j in range(0, padded_pixels.shape[1], n):
+            block = padded_pixels[i:i+n, j:j+n]
+
+            if mode == 'encrypt':
+                processed_block = encrypt_block(block, key_matrix)
             else:
-                padded_block = block
-            
-            encoded_block = np.dot(key_matrix, padded_block) % 256
-            result[i:i+block_size, j:j+block_size] = encoded_block[:block.shape[0], :block.shape[1]]
-    
-    return result.astype(np.uint8)
+                processed_block = decrypt_block(block, inv_key_matrix)
 
-def prepare_key(key_image):
-    h, w = key_image.shape
-    size = min(h, w)
-    key_matrix = key_image[:size, :size]
-    return key_matrix
+            # Ensure block is correctly reshaped back into the image
+            processed_pixels[i:i+n, j:j+n] = processed_block
 
-def save_image(image_array, path):
-    Image.fromarray(image_array).save(path)
-# Example usage
-plaintext_path = "nature.jpg"
-key_path = "keyimage.jpg"
+    # Crop padding for the final image
+    final_pixels = processed_pixels[:pixels.shape[0], :pixels.shape[1]]
 
-plaintext_array = read_and_prepare_image(plaintext_path)
-key_array = read_and_prepare_image(key_path)
+    # Save the processed image
+    processed_img = Image.fromarray(final_pixels.astype(np.uint8))
+    output_path = image_path.split('.')[0] + ('_encrypted' if mode == 'encrypt' else '_decrypted') + '.png'
+    processed_img.save(output_path)
 
-encrypted_array = hill_cipher_image(plaintext_array, key_array, mode='encrypt')
-decrypted_array = hill_cipher_image(encrypted_array, key_array, mode='decrypt')
+    return output_path
 
-save_image(encrypted_array, 'hill_encrypted_image.png')
-save_image(decrypted_array, 'hill_decrypted_image.png')
+# Define key matrix (must be invertible modulo 256)
+key_matrix = np.array( [
+   [1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+   [3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+   [6, 8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+   [6, 8, 10, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+   [6, 8, 10, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+   [6, 8, 10, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+   [6, 8, 10, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+   [6, 8, 10, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+   [6, 8, 10, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+   [6, 8, 10, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+   [0, 8, 10, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+   [0, 8, 10, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+   [0, 8, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+   [0, 8, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+   [0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+]
+)
+
+# Path to the image file
+image_path = 'nature.jpg'
+
+# Encrypt image
+encrypted_image_path = hill_cipher_image(image_path, key_matrix, mode='encrypt')
+print(f"Encrypted image saved to: {encrypted_image_path}")
+
+# Decrypt image
+decrypted_image_path = hill_cipher_image(encrypted_image_path, key_matrix, mode='decrypt')
+print(f"Decrypted image saved to: {decrypted_image_path}")
